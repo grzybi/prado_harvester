@@ -1,93 +1,77 @@
 from bs4 import BeautifulSoup
 import requests as req
+import argparse
 from document import Document
-# import itertools
-import os
+from image_writer import ImageWriter
 
 PRADO = str("https://www.consilium.europa.eu/prado")
 
 
 class PradoEuBo:
-    def __init__(self):
+    def __init__(self, force, eu_only, countries, doc_types):
+        country_dict = self.build_countries_dict(countries, eu_only)
+        documents = self.build_documents_list(country_dict)
+
+        for i, d in enumerate(documents):
+            print(f"\nDocument {i + 1}/{len(documents)}")
+            image_writer = ImageWriter("img", d, force)
+            image_writer.write_front()
+            image_writer.write_back()
+
+    @staticmethod
+    def build_countries_dict(countries, eu_only):
         response = req.get(PRADO + "/en/search-by-document-country.html")
         soup = BeautifulSoup(response.text, "lxml")
-        countries_block = soup.find_all(attrs={"class": "council-link-list"})
-        print(type(countries_block))
-        country_list = dict()
+        countries_blocks = soup.find_all(attrs={"class": "council-link-list"})
+        country_dict = dict()
 
-        print(len(countries_block))
-        for block in countries_block:
-            countries = block.find_all("a")
-            for country in countries:
-                country_name = country.text.split("-")[1]
-                country_name = country_name.split(" * ")[1].split(" *")[0] if "*" in country_name \
-                    else country_name.split(" ")[1]
-                country_list[str(country.text.split(" -")[0])] = country_name
+        if countries:
+            country_dict = dict([(c.upper(), c.capitalize()) for c in countries[0]])
+        else:
+            for block in countries_blocks[:2] if eu_only else countries_blocks:
+                country_link = block.find_all("a")
+                for country in country_link:
+                    country_name = country.text.split("-")[1]
+                    country_name = country_name.split(" * ")[1].split(" *")[0] if "*" in country_name \
+                        else country_name.split(" ")[1]
+                    country_dict[str(country.text.split(" -")[0])] = country_name
 
-        print(country_list)
-        # print(len(country_list))
+        return country_dict
 
+    @staticmethod
+    def build_documents_list(country_dict):
         documents = list()
-
-        # TODO: check slicing
-        # for c in ["PRK"]:
-        for c in country_list:
+        # TODO: add selecting type of document(s)
+        for c in country_dict:
             print(c)
+            # TODO: needs to investigate what is wrong with PSE
             if c == "PSE":
                 continue
-        # for c in dict(itertools.islice(country_list.items(), 3)):
-            s = PRADO + "/en/prado-documents/" + str(c) + "/B/O/docs-per-type.html"
-            # print(s)
-            response = req.get(s)
+
+            site = PRADO + "/en/prado-documents/" + str(c) + "/B/O/docs-per-type.html"
+            response = req.get(site)
             soup = BeautifulSoup(response.text, "lxml")
             searching = soup.find_all(attrs={"id": "prado-top"})
             if searching:
-                document_datas = searching[0].find_all(attrs={"class": "doc-info col-sm-8"})
+                document_data = searching[0].find_all(attrs={"class": "doc-info col-sm-8"})
                 document_images = searching[0].find_all(attrs={"class": "doc-thumbnails col-sm-4"})
 
-                for i, doc in enumerate(document_datas):
-                    document = Document()
-                    document.id = str(doc).split("</a>")[0].rsplit(" ")[-1]
-                    document.country = document.id.split("-")[0]
-                    document.type = document.id.split("-")[1].split("-")[0]
-                    document.first_issued_from = str(doc).split("First issued on:")
-
-                    if len(document.first_issued_from) == 2:
-                        document.first_issued_from = document.first_issued_from[1].split("</p>")[0].rsplit(" ")[-1]
-                    else:
-                        print("!!!" + document.id)
-                        document.first_issued_from = "unknown"
-
-                    document.image_front = PRADO + "/images/" + document.id + "/" + \
-                        str(document_images[i]).split("image-")[1].split(".html")[0] + ".jpg"
-                    document.image_back = PRADO + "/images/" + document.id + "/" + \
-                        str(document_images[i]).split("image-")[2].split(".html")[0] + ".jpg"
-
-                    # print(document.to_string())
-
-                    # parsed = json.dumps(json.loads(document.to_string()), indent=4)
-                    # print(parsed)
-
+                for i, doc in enumerate(document_data):
+                    document = Document(doc, document_images[i])
+                    print(document.to_string())
                     documents.append(document)
-                # print(searching)
             else:
                 print("!!! NOTHING FOUND FOR: " + c)
 
-        os.makedirs("img", exist_ok=True)
-
-        for i, d in enumerate(documents):
-            r = req.get(d.image_front)
-            with open(os.path.join("img", d.id + "-front.jpg"), "wb") as outfile:
-                outfile.write(r.content)
-                outfile.close()
-
-            r = req.get(d.image_back)
-            with open(os.path.join("img", d.id + "-back.jpg"), "wb") as outfile:
-                outfile.write(r.content)
-                outfile.close()
-
-            print(f"{i + 1}/{len(documents)}")
+        return documents
 
 
 if __name__ == "__main__":
-    prado = PradoEuBo()
+    parser = argparse.ArgumentParser(description="Webscrapper for images from PRADO database.")
+    parser.add_argument('--force', help="Force downloading images", action="store_true")
+    parser.add_argument('--eu', help="Scrap countries only from EU", action="store_true")
+    parser.add_argument('--country', help="Specify countries to scrap", action="append", nargs="+", type=str)
+    parser.add_argument('--doc-type', help="Specify document type(s) to scrap", action="append")
+    args = parser.parse_args()
+
+    prado = PradoEuBo(args.force, args.eu, args.country, args.doc_type)
